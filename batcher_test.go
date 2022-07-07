@@ -26,8 +26,14 @@ func TestNormal(t *testing.T) {
 	assert.Equal(t, []string{"1", "2", "3", "4", "5"}, consumer.Taken())
 	batcher.Add("7")
 	batcher.Add("8")
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		assert.NoError(t, batcher.Close())
+		wg.Done()
+	}()
 	assert.Equal(t, []string{"6", "7", "8"}, consumer.Taken())
-	assert.NoError(t, batcher.Close())
+	wg.Wait()
 	consumer.Close()
 	mockClock.Close()
 }
@@ -35,7 +41,8 @@ func TestNormal(t *testing.T) {
 func TestExponentialBackoff(t *testing.T) {
 	mockClock := newMockClock()
 	consumer := newMockConsumer()
-	batcher := newForTesting(consumer.Consume, mockClock)
+	batcher := newForTesting(
+		consumer.Consume, mockClock, FlushInterval(100*time.Millisecond))
 	batcher.Add("1")
 	batcher.Add("2")
 	batcher.Add("3")
@@ -63,14 +70,14 @@ func TestExponentialBackoff(t *testing.T) {
 
 func TestFlush(t *testing.T) {
 	consumer := newMockConsumer()
-	batcher := New(consumer.Consume, ManualFlush(), BufferSize(0), BatchSize(3))
+	batcher := New(consumer.Consume, FlushInterval(0), BatchSize(3))
 	batcher.Add("1")
 	batcher.Add("2")
 	batcher.Add("3")
 	batcher.Add("4")
 
 	// Make sure no autoflushing is going on
-	time.Sleep(2 * time.Second)
+	time.Sleep(100 * time.Millisecond)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {

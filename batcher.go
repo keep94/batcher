@@ -69,10 +69,15 @@ func MaxDuration(d time.Duration) Option {
 	})
 }
 
-// ManualFlush disables auto flushing. Auto flushing is on by default.
-func ManualFlush() Option {
+// FlushInterval sets the maximum amount of time to wait between sending
+// lines. If there is already a full batch of lines to send, no waiting is
+// done. The default is 1 second. 0 means auto-flushing is turned off.
+func FlushInterval(d time.Duration) Option {
+	if d < 0 {
+		panic("FlushInterval must be non-negative")
+	}
 	return optionFunc(func(cfg *config) {
-		cfg.autoFlush = false
+		cfg.flushInterval = d
 	})
 }
 
@@ -101,19 +106,15 @@ func newForTesting(consumer Consumer, clck clock, options ...Option) *Batcher {
 		maxDuration:     5 * time.Minute,
 		bufferSize:      50000,
 		batchSize:       10000,
-		autoFlush:       true,
+		flushInterval:   time.Second,
 	}
 	for _, opt := range options {
 		opt.apply(&cfg)
 	}
 	cfg.fixUp()
-	var bufferWaitTime time.Duration
-	if cfg.autoFlush {
-		bufferWaitTime = time.Second
-	}
 	result := &Batcher{
 		consumer:        consumer,
-		buf:             newBuffer(cfg.bufferSize, cfg.batchSize, bufferWaitTime),
+		buf:             newBuffer(cfg.bufferSize, cfg.batchSize, cfg.flushInterval),
 		batchSize:       cfg.batchSize,
 		initialInterval: cfg.initialInterval,
 		maxInterval:     cfg.maxInterval,
@@ -121,7 +122,7 @@ func newForTesting(consumer Consumer, clck clock, options ...Option) *Batcher {
 		clck:            clck,
 		done:            make(chan struct{}),
 	}
-	if cfg.autoFlush {
+	if cfg.flushInterval > 0 {
 		go result.loop()
 	} else {
 		close(result.done)
@@ -202,7 +203,7 @@ type config struct {
 	maxDuration     time.Duration
 	bufferSize      int
 	batchSize       int
-	autoFlush       bool
+	flushInterval   time.Duration
 }
 
 func (c *config) fixUp() {
