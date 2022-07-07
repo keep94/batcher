@@ -1,27 +1,31 @@
 package batcher
 
 import (
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 )
 
+var (
+	errConsuming = errors.New("error Consuming")
+)
+
 func TestNormal(t *testing.T) {
 	mockClock := newMockClock()
 	consumer := newMockConsumer()
-	batcher := newForTesting(consumer.Consume, mockClock, BatchSize(5))
+	batcher := New(consumer.Consume, BufferSize(0), BatchSize(5))
 	batcher.Add("1")
 	batcher.Add("2")
 	batcher.Add("3")
 	batcher.Add("4")
 	batcher.Add("5")
 	batcher.Add("6")
-	assert.Equal(t, time.Second, mockClock.WaitAwhile())
 	assert.Equal(t, []string{"1", "2", "3", "4", "5"}, consumer.Taken())
 	batcher.Add("7")
 	batcher.Add("8")
-	assert.Equal(t, time.Second, mockClock.WaitAwhile())
 	assert.Equal(t, []string{"6", "7", "8"}, consumer.Taken())
 	assert.NoError(t, batcher.Close())
 	consumer.Close()
@@ -35,26 +39,47 @@ func TestExponentialBackoff(t *testing.T) {
 	batcher.Add("1")
 	batcher.Add("2")
 	batcher.Add("3")
-	assert.Equal(t, time.Second, mockClock.WaitAwhile())
 	assert.Equal(t, []string{"1", "2", "3"}, consumer.TakenRequestRetry())
-	assert.Equal(t, 2*time.Second, mockClock.WaitAwhile())
+	assert.Equal(t, 5*time.Second, mockClock.WaitAwhile())
 	assert.Equal(t, []string{"1", "2", "3"}, consumer.TakenRequestRetry())
-	assert.Equal(t, 4*time.Second, mockClock.WaitAwhile())
+	assert.Equal(t, 10*time.Second, mockClock.WaitAwhile())
 	assert.Equal(t, []string{"1", "2", "3"}, consumer.TakenRequestRetry())
-	assert.Equal(t, 8*time.Second, mockClock.WaitAwhile())
+	assert.Equal(t, 20*time.Second, mockClock.WaitAwhile())
 	assert.Equal(t, []string{"1", "2", "3"}, consumer.TakenRequestRetry())
-	assert.Equal(t, 16*time.Second, mockClock.WaitAwhile())
-	assert.Equal(t, []string{"1", "2", "3"}, consumer.TakenRequestRetry())
-	assert.Equal(t, 32*time.Second, mockClock.WaitAwhile())
+	assert.Equal(t, 40*time.Second, mockClock.WaitAwhile())
 	assert.Equal(t, []string{"1", "2", "3"}, consumer.TakenRequestRetry())
 	assert.Equal(t, 60*time.Second, mockClock.WaitAwhile())
 	assert.Equal(t, []string{"1", "2", "3"}, consumer.TakenRequestRetry())
 	assert.Equal(t, 60*time.Second, mockClock.WaitAwhile())
-	assert.Equal(t, []string{"1", "2", "3"}, consumer.Taken())
+	assert.Equal(t, []string{"1", "2", "3"}, consumer.TakenRequestRetry())
+	assert.Equal(t, 60*time.Second, mockClock.WaitAwhile())
+	assert.Equal(t, []string{"1", "2", "3"}, consumer.TakenRequestRetry())
+	assert.Equal(t, 60*time.Second, mockClock.WaitAwhile())
+	assert.Equal(t, []string{"1", "2", "3"}, consumer.TakenRequestRetry())
 	assert.NoError(t, batcher.Close())
 	consumer.Close()
 	mockClock.Close()
+}
 
+func TestFlush(t *testing.T) {
+	consumer := newMockConsumer()
+	batcher := New(consumer.Consume, ManualFlush(), BufferSize(0), BatchSize(3))
+	batcher.Add("1")
+	batcher.Add("2")
+	batcher.Add("3")
+	batcher.Add("4")
+
+	// Make sure no autoflushing is going on
+	time.Sleep(2 * time.Second)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		assert.Nil(t, batcher.Flush())
+		wg.Done()
+	}()
+	assert.Equal(t, []string{"1", "2", "3"}, consumer.Taken())
+	assert.Equal(t, []string{"4"}, consumer.Taken())
+	wg.Wait()
 }
 
 type mockClock struct {
@@ -99,11 +124,14 @@ func (m *mockConsumer) TakenRequestRetry() []string {
 	return <-m.strsCh
 }
 
-func (m *mockConsumer) Consume(strs []string) bool {
+func (m *mockConsumer) Consume(strs []string) (error, bool) {
 	strCopy := make([]string, len(strs))
 	copy(strCopy, strs)
 	m.strsCh <- strCopy
-	return <-m.resultCh
+	if <-m.resultCh {
+		return errConsuming, true
+	}
+	return nil, false
 }
 
 func (m *mockConsumer) Close() {
