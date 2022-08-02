@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -38,30 +39,42 @@ func TestNormal(t *testing.T) {
 	mockClock.Close()
 }
 
-func TestExponentialBackoff(t *testing.T) {
+func TestBackoff(t *testing.T) {
 	mockClock := newMockClock()
 	consumer := newMockConsumer()
 	batcher := newForTesting(
-		consumer.Consume, mockClock, FlushInterval(100*time.Millisecond))
+		consumer.Consume,
+		mockClock,
+		FlushInterval(100*time.Millisecond),
+		BackOffStrategy(
+			backoff.WithMaxRetries(
+				&backoff.ConstantBackOff{Interval: 6 * time.Second},
+				2,
+			),
+		))
 	batcher.Add("1")
 	batcher.Add("2")
 	batcher.Add("3")
 	assert.Equal(t, []string{"1", "2", "3"}, consumer.TakenRequestRetry())
-	assert.Equal(t, 5*time.Second, mockClock.WaitAwhile())
+	assert.Equal(t, 6*time.Second, mockClock.WaitAwhile())
 	assert.Equal(t, []string{"1", "2", "3"}, consumer.TakenRequestRetry())
-	assert.Equal(t, 10*time.Second, mockClock.WaitAwhile())
+	assert.Equal(t, 6*time.Second, mockClock.WaitAwhile())
 	assert.Equal(t, []string{"1", "2", "3"}, consumer.TakenRequestRetry())
-	assert.Equal(t, 20*time.Second, mockClock.WaitAwhile())
-	assert.Equal(t, []string{"1", "2", "3"}, consumer.TakenRequestRetry())
-	assert.Equal(t, 40*time.Second, mockClock.WaitAwhile())
-	assert.Equal(t, []string{"1", "2", "3"}, consumer.TakenRequestRetry())
-	assert.Equal(t, 60*time.Second, mockClock.WaitAwhile())
-	assert.Equal(t, []string{"1", "2", "3"}, consumer.TakenRequestRetry())
-	assert.Equal(t, 60*time.Second, mockClock.WaitAwhile())
-	assert.Equal(t, []string{"1", "2", "3"}, consumer.TakenRequestRetry())
-	assert.Equal(t, 60*time.Second, mockClock.WaitAwhile())
-	assert.Equal(t, []string{"1", "2", "3"}, consumer.TakenRequestRetry())
-	assert.Equal(t, 60*time.Second, mockClock.WaitAwhile())
+	assert.NoError(t, batcher.Close())
+	consumer.Close()
+	mockClock.Close()
+}
+
+func TestNoBackoff(t *testing.T) {
+	mockClock := newMockClock()
+	consumer := newMockConsumer()
+	batcher := newForTesting(
+		consumer.Consume,
+		mockClock,
+		FlushInterval(100*time.Millisecond))
+	batcher.Add("1")
+	batcher.Add("2")
+	batcher.Add("3")
 	assert.Equal(t, []string{"1", "2", "3"}, consumer.TakenRequestRetry())
 	assert.NoError(t, batcher.Close())
 	consumer.Close()

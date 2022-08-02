@@ -2,6 +2,8 @@ package batcher
 
 import (
 	"time"
+
+	"github.com/cenkalti/backoff/v4"
 )
 
 // Type Consumer consumes a batch of lines. A non-nil error and a retry of
@@ -35,37 +37,11 @@ func BufferSize(n int) Option {
 	})
 }
 
-// InitialInterval configures the initial amount of time to wait before
-// a retry. Default is 5 seconds. d must be positive.
-func InitialInterval(d time.Duration) Option {
-	if d <= 0 {
-		panic("InitialInterval must be positive")
-	}
+// BackOffStrategy sets the back off strategy for retries. The default
+// is that retries are turned off.
+func BackOffStrategy(strategy backoff.BackOff) Option {
 	return optionFunc(func(cfg *config) {
-		cfg.initialInterval = d
-	})
-}
-
-// MaxInterval configures the maximum amount of time to wait before a retry.
-// default is 1 minute. 0 means no maximum. d must be non-negative.
-func MaxInterval(d time.Duration) Option {
-	if d < 0 {
-		panic("MaxInterval must be non-negative")
-	}
-	return optionFunc(func(cfg *config) {
-		cfg.maxInterval = d
-	})
-}
-
-// MaxDuration configures the total amount of waiting time before giving up
-// on retries. Default is 5 minutes. 0 means retries are disabled. d
-// must be non-negative
-func MaxDuration(d time.Duration) Option {
-	if d < 0 {
-		panic("MaxDuration must be non-negative")
-	}
-	return optionFunc(func(cfg *config) {
-		cfg.maxDuration = d
+		cfg.backoffStrategy = strategy
 	})
 }
 
@@ -86,9 +62,7 @@ type Batcher struct {
 	consumer        Consumer
 	buf             *buffer
 	batchSize       int
-	initialInterval time.Duration
-	maxInterval     time.Duration
-	maxDuration     time.Duration
+	backoffStrategy backoff.BackOff
 	clck            clock
 	done            chan struct{}
 }
@@ -101,12 +75,9 @@ func New(consumer Consumer, options ...Option) *Batcher {
 
 func newForTesting(consumer Consumer, clck clock, options ...Option) *Batcher {
 	cfg := config{
-		initialInterval: 5 * time.Second,
-		maxInterval:     time.Minute,
-		maxDuration:     5 * time.Minute,
-		bufferSize:      50000,
-		batchSize:       10000,
-		flushInterval:   time.Second,
+		bufferSize:    50000,
+		batchSize:     10000,
+		flushInterval: time.Second,
 	}
 	for _, opt := range options {
 		opt.apply(&cfg)
@@ -116,9 +87,7 @@ func newForTesting(consumer Consumer, clck clock, options ...Option) *Batcher {
 		consumer:        consumer,
 		buf:             newBuffer(cfg.bufferSize, cfg.batchSize, cfg.flushInterval),
 		batchSize:       cfg.batchSize,
-		initialInterval: cfg.initialInterval,
-		maxInterval:     cfg.maxInterval,
-		maxDuration:     cfg.maxDuration,
+		backoffStrategy: cfg.backoffStrategy,
 		clck:            clck,
 		done:            make(chan struct{}),
 	}
@@ -172,20 +141,16 @@ func (b *Batcher) loop() {
 		if len(lines) == 0 {
 			continue
 		}
-		delay := b.initialInterval
-		var totalDelay time.Duration
-		for err, retry := b.consumer(lines); err != nil; err, retry = b.consumer(lines) {
+		b.backoffStrategy.Reset()
+		for err, retry := b.consumer(lines); retry && err != nil; err, retry = b.consumer(lines) {
+
 			// Maybe log the error, but how?
 
-			if !retry || totalDelay >= b.maxDuration {
+			delay := b.backoffStrategy.NextBackOff()
+			if delay == backoff.Stop {
 				break
 			}
 			b.clck.Sleep(delay)
-			totalDelay += delay
-			delay *= 2
-			if delay > b.maxInterval {
-				delay = b.maxInterval
-			}
 		}
 	}
 }
@@ -197,17 +162,15 @@ func (o optionFunc) apply(cfg *config) {
 }
 
 type config struct {
-	initialInterval time.Duration
-	maxInterval     time.Duration
-	maxDuration     time.Duration
+	backoffStrategy backoff.BackOff
 	bufferSize      int
 	batchSize       int
 	flushInterval   time.Duration
 }
 
 func (c *config) fixUp() {
-	if c.maxInterval > 0 && c.initialInterval > c.maxInterval {
-		c.maxInterval = c.initialInterval
+	if c.backoffStrategy == nil {
+		c.backoffStrategy = &backoff.StopBackOff{}
 	}
 	if c.bufferSize > 0 && c.batchSize > c.bufferSize {
 		c.bufferSize = c.batchSize
