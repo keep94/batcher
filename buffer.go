@@ -70,7 +70,8 @@ func (b *buffer) Add(line string) bool {
 // Batch blocks until it can drain batchSize lines from the buffer or
 // until maxWaitTime time passes. Batch returns the lines drained. If
 // the buffer is closed, Batch does no blocking. scratch points to a slice
-// that backs what is returned.
+// that backs what is returned. If this buffer is both closed and empty,
+// Batch returns nil immediately.
 func (b *buffer) Batch(scratch *[]string) []string {
 	// We reserve nil for a closed, empty buffer.
 	if *scratch == nil {
@@ -97,7 +98,8 @@ func (b *buffer) Batch(scratch *[]string) []string {
 }
 
 // All drains and returns all lines currently in the buffer without blocking.
-// scratch points to a slice that backs what is returned.
+// scratch points to a slice that backs what is returned. If this buffer is
+// both closed and empty, All returns nil.
 func (b *buffer) All(scratch *[]string) []string {
 	// We reserve nil for a closed, empty buffer.
 	if *scratch == nil {
@@ -116,6 +118,7 @@ func (b *buffer) All(scratch *[]string) []string {
 	return *scratch
 }
 
+// Close closes this buffer so that it no longer accepts new lines.
 func (b *buffer) Close() {
 	b.lock.Lock()
 	defer b.lock.Unlock()
