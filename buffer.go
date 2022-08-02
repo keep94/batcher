@@ -73,11 +73,6 @@ func (b *buffer) Add(line string) bool {
 // that backs what is returned. If this buffer is both closed and empty,
 // Batch returns nil immediately.
 func (b *buffer) Batch(scratch *[]string) []string {
-	// We reserve nil for a closed, empty buffer.
-	if *scratch == nil {
-		*scratch = make([]string, 0)
-	}
-	*scratch = (*scratch)[:0]
 	ctime := time.Now()
 	b.lock.Lock()
 	defer b.lock.Unlock()
@@ -91,6 +86,11 @@ func (b *buffer) Batch(scratch *[]string) []string {
 	if size > b.batchSize {
 		size = b.batchSize
 	}
+	// We reserve nil for a closed and empty buffer.
+	if *scratch == nil {
+		*scratch = make([]string, 0)
+	}
+	*scratch = (*scratch)[:0]
 	for i := 0; i < size; i++ {
 		*scratch = append(*scratch, b.data.Remove(b.data.Front()).(string))
 	}
@@ -98,24 +98,19 @@ func (b *buffer) Batch(scratch *[]string) []string {
 }
 
 // All drains and returns all lines currently in the buffer without blocking.
-// scratch points to a slice that backs what is returned. If this buffer is
-// both closed and empty, All returns nil.
-func (b *buffer) All(scratch *[]string) []string {
-	// We reserve nil for a closed, empty buffer.
-	if *scratch == nil {
-		*scratch = make([]string, 0)
-	}
-	*scratch = (*scratch)[:0]
+// If this buffer is both closed and empty, All returns nil.
+func (b *buffer) All() []string {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	if b.closed && b.data.Len() == 0 {
 		return nil
 	}
 	size := b.data.Len()
+	result := make([]string, 0, size)
 	for i := 0; i < size; i++ {
-		*scratch = append(*scratch, b.data.Remove(b.data.Front()).(string))
+		result = append(result, b.data.Remove(b.data.Front()).(string))
 	}
-	return *scratch
+	return result
 }
 
 // Close closes this buffer so that it no longer accepts new lines.

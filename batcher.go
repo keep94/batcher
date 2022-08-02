@@ -147,8 +147,7 @@ func (b *Batcher) Close() error {
 // Flush flushes this batcher. It is intended to be called only when
 // auto flushing is turned off. Flush does no internal retrying on error.
 func (b *Batcher) Flush() error {
-	var scratch []string
-	allLines := b.buf.All(&scratch)
+	allLines := b.buf.All()
 	for length := len(allLines); length > 0; length = len(allLines) {
 		if length > b.batchSize {
 			length = b.batchSize
